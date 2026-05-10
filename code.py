@@ -378,14 +378,12 @@ while True:
         blink_state = not blink_state
         last_blink = now
 
-    # --- Check USB status (every display cycle for instant response) ---
-    usb_connected = supervisor.runtime.usb_connected
-
     # --- Read Battery (every 1 second, or 2 seconds after stabilized) ---
     # Use cell_percent directly from the MAX17048 - it handles all the complexity
     # of LiPo discharge curves and charging via its ModelGauge algorithm
     batt_interval = 1.0 if batt_reads < 2 else 2.0
     if now - last_batt_update > batt_interval:
+        usb_connected = supervisor.runtime.usb_connected
         if has_battery:
             try:
                 reading = battery.cell_percent
