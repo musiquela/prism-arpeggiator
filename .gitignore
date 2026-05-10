@@ -1,0 +1,23 @@
+# CircuitPython
+*.mpy
+lib/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.pyc
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Work tracking
+.work/
