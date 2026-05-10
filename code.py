@@ -415,11 +415,13 @@ while True:
             else:
                 batt_label.text = f"{pct}%"
 
-            # Color: grey normally, orange when low, red when critical (blinking)
+            # Color: green when good, grey when moderate, orange/red when low
             if pct <= 5:
                 batt_label.color = 0xFF0000 if blink_state else 0x000000  # Blink red
             elif pct <= 10:
                 batt_label.color = 0xFF8800  # Orange
+            elif pct > 50:
+                batt_label.color = 0x00FF00  # Green
             else:
                 batt_label.color = 0x888888  # Grey
 
