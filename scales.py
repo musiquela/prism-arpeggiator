@@ -4,14 +4,14 @@
 
 # Scale definitions as semitone offsets from root
 SCALES = {
-    "OFF": None,  # No quantization
-    "MAJ": (0, 2, 4, 5, 7, 9, 11),  # Major
-    "MIN": (0, 2, 3, 5, 7, 8, 10),  # Natural Minor
-    "PEN": (0, 2, 4, 7, 9),  # Major Pentatonic
-    "BLU": (0, 3, 5, 6, 7, 10),  # Blues
-    "DOR": (0, 2, 3, 5, 7, 9, 10),  # Dorian
-    "MIX": (0, 2, 4, 5, 7, 9, 10),  # Mixolydian
-    "HMN": (0, 2, 3, 5, 7, 8, 11),  # Harmonic Minor
+    "OFF": None,
+    "MAJOR": (0, 2, 4, 5, 7, 9, 11),
+    "MINOR": (0, 2, 3, 5, 7, 8, 10),
+    "PENTATONIC": (0, 2, 4, 7, 9),
+    "BLUES": (0, 3, 5, 6, 7, 10),
+    "DORIAN": (0, 2, 3, 5, 7, 9, 10),
+    "MIXOLYDIAN": (0, 2, 4, 5, 7, 9, 10),
+    "HARMONIC": (0, 2, 3, 5, 7, 8, 11),
 }
 
 SCALE_NAMES = list(SCALES.keys())

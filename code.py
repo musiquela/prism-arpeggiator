@@ -4,9 +4,12 @@ MIDI Arpeggiator - Phase 3: Full Features
 ESP32-S3 Reverse TFT Feather + MIDI FeatherWing
 
 Controls:
-- D0: Cycle pattern (normal) / decrease selected param (edit mode)
+- D0: Decrease selected param (edit mode only) / wake display
 - D1: Tap tempo (normal) / long press enter/exit edit mode / short press cycle param (edit mode)
-- D2: Cycle octaves (normal) / increase selected param (edit mode)
+- D2: Increase selected param (edit mode only) / wake display
+- D0+D2 (hold 2s): Enter deep sleep mode (preserves settings)
+- Auto-sleep: After 15 min of no MIDI/button activity
+- Any button: Wake from deep sleep
 
 Connect synth MIDI OUT → FeatherWing MIDI IN
 Connect FeatherWing MIDI OUT → synth MIDI IN
@@ -15,6 +18,14 @@ Connect FeatherWing MIDI OUT → synth MIDI IN
 import board
 # Immediately blank display to prevent REPL flash during imports
 board.DISPLAY.root_group = None
+
+# Check if waking from deep sleep (must check before any display ops)
+waking_from_sleep = False
+try:
+    import alarm as _alarm_check
+    waking_from_sleep = _alarm_check.wake_alarm is not None
+except ImportError:
+    pass
 
 import busio
 import digitalio
@@ -28,6 +39,15 @@ import adafruit_midi
 from adafruit_midi.note_on import NoteOn
 from adafruit_midi.note_off import NoteOff
 
+# Deep sleep support - graceful fallback if unavailable
+try:
+    import alarm
+    from alarm.pin import PinAlarm
+    DEEP_SLEEP_AVAILABLE = True
+except ImportError:
+    DEEP_SLEEP_AVAILABLE = False
+    alarm = None
+
 # Import our modules
 from note_buffer import NoteBuffer
 from arpeggiator import Arpeggiator
@@ -36,7 +56,10 @@ from scales import SCALE_NAMES
 # --- Display Setup ---
 display = board.DISPLAY
 
-# Boot splash screen
+# Set initial brightness for manual control
+display.brightness = 1.0
+
+# Boot splash screen - different for cold boot vs wake from sleep
 boot_splash = displayio.Group()
 display.root_group = boot_splash
 
@@ -45,18 +68,26 @@ boot_pal = displayio.Palette(1)
 boot_pal[0] = 0x000000
 boot_splash.append(displayio.TileGrid(boot_bg, pixel_shader=boot_pal))
 
-title_label = label.Label(terminalio.FONT, text="David Wingo's", color=0x888888, scale=2)
-title_label.anchor_point = (0.5, 0.5)
-title_label.anchored_position = (120, 55)
-boot_splash.append(title_label)
+if waking_from_sleep:
+    # Brief wake indicator
+    wake_label = label.Label(terminalio.FONT, text="Waking...", color=0x00FF88, scale=2)
+    wake_label.anchor_point = (0.5, 0.5)
+    wake_label.anchored_position = (120, 67)
+    boot_splash.append(wake_label)
+    time.sleep(0.3)
+else:
+    # Full boot splash
+    title_label = label.Label(terminalio.FONT, text="David Wingo's", color=0x888888, scale=2)
+    title_label.anchor_point = (0.5, 0.5)
+    title_label.anchored_position = (120, 55)
+    boot_splash.append(title_label)
 
-subtitle_label = label.Label(terminalio.FONT, text="Arpeggiator", color=0xFFFFFF, scale=3)
-subtitle_label.anchor_point = (0.5, 0.5)
-subtitle_label.anchored_position = (120, 85)
-boot_splash.append(subtitle_label)
+    subtitle_label = label.Label(terminalio.FONT, text="Arpeggiator", color=0xFFFFFF, scale=3)
+    subtitle_label.anchor_point = (0.5, 0.5)
+    subtitle_label.anchored_position = (120, 85)
+    boot_splash.append(subtitle_label)
 
-# Show splash briefly
-time.sleep(1.5)
+    time.sleep(1.5)
 
 # Main UI
 splash = displayio.Group()
@@ -149,10 +180,7 @@ try:
     if battery.hibernating:
         battery.wake()
 
-    print(f"MAX17048: {battery.cell_voltage:.2f}V, {battery.cell_percent:.1f}%")
-
-except Exception as e:
-    print(f"Battery monitor not found: {e}")
+except Exception:
     has_battery = False
 
 # --- Components ---
@@ -203,11 +231,39 @@ PARAM_COLORS = {
 # Battery state
 batt_pct = 0
 batt_reads = 0  # Count successful reads before showing
-usb_connected = False
+was_charging = False  # Track previous charging state
+usb_reconnect_time = 0  # For 2-second white flash on reconnect
+show_charging_indicator = False  # Show + only when actively charging
 
-print("Arpeggiator Ready")
-print("Hold notes on your MIDI controller")
-print("Long press D1 for edit mode")
+# Display sleep state
+last_activity_time = time.monotonic()  # Initialize to boot time
+display_dimmed = False
+SLEEP_TIMEOUT = 10.0  # Seconds before dimming
+DIM_BRIGHTNESS = 0.1  # 10% brightness
+FULL_BRIGHTNESS = 1.0  # 100% brightness
+
+# Deep sleep settings
+DEEP_SLEEP_TIMEOUT = 900.0  # 15 minutes of no MIDI activity
+DEEP_SLEEP_HOLD_TIME = 2.0  # Seconds to hold D0+D2 for manual sleep
+
+# Deep sleep combo detection (D0 + D2 simultaneous long-press)
+d0d2_combo_start = 0
+d0d2_combo_active = False
+
+# Countdown display (full-screen centered) for sleep combo
+countdown_splash = displayio.Group()
+countdown_bg = displayio.Bitmap(240, 135, 1)
+countdown_pal = displayio.Palette(1)
+countdown_pal[0] = 0x000000
+countdown_splash.append(displayio.TileGrid(countdown_bg, pixel_shader=countdown_pal))
+countdown_label = label.Label(terminalio.FONT, text="", color=0xFF8800, scale=3)
+countdown_label.anchor_point = (0.5, 0.5)
+countdown_label.anchored_position = (120, 67)
+countdown_splash.append(countdown_label)
+
+# MIDI activity tracking for auto-sleep
+last_midi_activity = time.monotonic()
+
 
 # --- Helper Functions ---
 def update_param_display(blink):
@@ -274,6 +330,105 @@ def adjust_param(direction):
         arp.set_scale(SCALE_NAMES[scale_index])
         arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
 
+# --- Deep Sleep Functions ---
+def save_state_to_sleep_memory():
+    """Save arpeggiator state to sleep memory for restoration on wake."""
+    if not DEEP_SLEEP_AVAILABLE:
+        return
+    # Layout: [magic, bpm, pattern_index, division_index, octaves, scale_index]
+    alarm.sleep_memory[0] = 0xAB  # Magic byte to validate data
+    alarm.sleep_memory[1] = arp.bpm
+    alarm.sleep_memory[2] = pattern_index
+    alarm.sleep_memory[3] = division_index
+    alarm.sleep_memory[4] = arp.octaves
+    alarm.sleep_memory[5] = scale_index
+
+def restore_state_from_sleep_memory():
+    """Restore arpeggiator state from sleep memory after wake."""
+    global pattern_index, division_index, scale_index
+    if not DEEP_SLEEP_AVAILABLE:
+        return
+    # Check magic byte
+    if alarm.sleep_memory[0] != 0xAB:
+        return  # Invalid data, use defaults
+    # Restore state
+    arp.set_bpm(alarm.sleep_memory[1])
+    pattern_index = alarm.sleep_memory[2]
+    if pattern_index < len(Arpeggiator.PATTERNS):
+        arp.set_pattern(Arpeggiator.PATTERNS[pattern_index])
+    division_index = alarm.sleep_memory[3]
+    if division_index < len(DIVISIONS):
+        arp.set_division(DIVISIONS[division_index])
+    arp.set_octaves(alarm.sleep_memory[4])
+    scale_index = alarm.sleep_memory[5]
+    if scale_index < len(SCALE_NAMES):
+        arp.set_scale(SCALE_NAMES[scale_index])
+
+def show_sleep_message():
+    """Display sleep message briefly, then blank screen before deep sleep."""
+    sleep_splash = displayio.Group()
+    display.root_group = sleep_splash
+
+    # Black background
+    sleep_bg = displayio.Bitmap(240, 135, 1)
+    sleep_pal = displayio.Palette(1)
+    sleep_pal[0] = 0x000000
+    sleep_splash.append(displayio.TileGrid(sleep_bg, pixel_shader=sleep_pal))
+
+    # "SLEEP" in orange, centered
+    sleep_label = label.Label(terminalio.FONT, text="SLEEP", color=0xFF8800, scale=3)
+    sleep_label.anchor_point = (0.5, 0.5)
+    sleep_label.anchored_position = (120, 67)
+    sleep_splash.append(sleep_label)
+
+    time.sleep(0.5)
+
+    # Blank the screen before deep sleep so "Waking..." is first thing seen on wake
+    sleep_label.color = 0x000000
+
+def enter_deep_sleep():
+    """Save state and enter deep sleep until button press."""
+    if not DEEP_SLEEP_AVAILABLE:
+        return
+
+    # Save state for restoration
+    save_state_to_sleep_memory()
+
+    # Show sleep message
+    show_sleep_message()
+
+    # Wait for all buttons to be released before sleeping
+    # Otherwise the PinAlarm triggers immediately on the still-pressed button
+    while (not btn_d0.value) or btn_d1.value or btn_d2.value:
+        time.sleep(0.01)
+    time.sleep(0.1)  # Extra debounce delay
+
+    # Disable TFT power for minimal power consumption
+    # On ESP32-S3 Reverse TFT Feather, this drops from ~70mA to ~18µA
+    tft_power = digitalio.DigitalInOut(board.TFT_I2C_POWER)
+    tft_power.switch_to_output(value=False)
+
+    # Release button pins before creating PinAlarms
+    btn_d0.deinit()
+    btn_d1.deinit()
+    btn_d2.deinit()
+
+    # Configure wake alarms for all three buttons
+    # pull=True enables internal pull resistor opposite to value (prevents false triggers)
+    # D0: wake when LOW, pull=True enables pull-UP
+    # D1/D2: wake when HIGH, pull=True enables pull-DOWN
+    pin_alarm_d0 = PinAlarm(pin=board.D0, value=False, pull=True)
+    pin_alarm_d1 = PinAlarm(pin=board.D1, value=True, pull=True)
+    pin_alarm_d2 = PinAlarm(pin=board.D2, value=True, pull=True)
+
+    # Enter deep sleep - this NEVER returns, device will restart
+    alarm.exit_and_deep_sleep_until_alarms(pin_alarm_d0, pin_alarm_d1, pin_alarm_d2)
+
+# Restore state if waking from deep sleep
+if waking_from_sleep and DEEP_SLEEP_AVAILABLE:
+    restore_state_from_sleep_memory()
+
+
 # --- Main Loop ---
 while True:
     now = time.monotonic()
@@ -281,6 +436,7 @@ while True:
     # --- Read MIDI Input ---
     msg = midi.receive()
     if msg is not None:
+        last_midi_activity = now  # Reset auto-sleep timer on MIDI activity
         if isinstance(msg, NoteOn) and msg.velocity > 0:
             note_buffer.note_on(msg.note, msg.velocity)
             arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
@@ -292,6 +448,17 @@ while True:
     d0 = not btn_d0.value
     d1 = btn_d1.value
     d2 = btn_d2.value
+
+    # Track activity for display sleep and auto deep sleep
+    any_button = d0 or d1 or d2
+    wake_press = False  # Flag to consume button press when waking
+    if any_button:
+        last_activity_time = now
+        last_midi_activity = now  # Buttons also reset auto-sleep timer
+        if display_dimmed:
+            display.brightness = FULL_BRIGHTNESS
+            display_dimmed = False
+            wake_press = True  # Consume this press - don't trigger actions
 
     # --- D1: Long press detection for edit mode ---
     if d1:
@@ -313,7 +480,7 @@ while True:
     else:
         if d1_was_pressed:
             # Button released
-            if not d1_long_press_handled:
+            if not d1_long_press_handled and not wake_press:
                 # Was a short press (< 1 second)
                 if edit_mode:
                     # In edit mode: cycle to next parameter
@@ -333,9 +500,9 @@ while True:
                         last_btn_time["d1"] = now
         d1_was_pressed = False
 
-    # --- D0 and D2 behavior ---
-    if edit_mode:
-        # Edit mode: D0/D2 adjust the selected parameter's value
+    # --- D0 and D2 behavior (edit mode only) ---
+    if edit_mode and not wake_press:
+        # D0/D2 adjust the selected parameter's value
         if d0 and (now - last_btn_time["d0"] > 0.15):
             adjust_param(-1)
             last_btn_time["d0"] = now
@@ -343,21 +510,29 @@ while True:
         if d2 and (now - last_btn_time["d2"] > 0.15):
             adjust_param(1)
             last_btn_time["d2"] = now
-    else:
-        # Normal mode
-        # D0: Cycle pattern
-        if d0 and (now - last_btn_time["d0"] > 0.25):
-            pattern_index = (pattern_index + 1) % len(Arpeggiator.PATTERNS)
-            arp.set_pattern(Arpeggiator.PATTERNS[pattern_index])
-            arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
-            last_btn_time["d0"] = now
+    # Normal mode: D0/D2 do nothing (only wake from sleep, handled above)
 
-        # D2: Cycle octaves
-        if d2 and (now - last_btn_time["d2"] > 0.25):
-            new_oct = (arp.octaves % 4) + 1
-            arp.set_octaves(new_oct)
-            arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
-            last_btn_time["d2"] = now
+    # --- D0+D2 Combo: Deep Sleep Trigger ---
+    if d0 and d2:
+        if not d0d2_combo_active:
+            d0d2_combo_start = now
+            d0d2_combo_active = True
+            # Switch to full-screen countdown display
+            display.root_group = countdown_splash
+        # Show countdown centered
+        elapsed = now - d0d2_combo_start
+        if elapsed < DEEP_SLEEP_HOLD_TIME:
+            countdown_label.text = f"SLEEP {DEEP_SLEEP_HOLD_TIME - elapsed:.1f}"
+        elif DEEP_SLEEP_AVAILABLE:
+            enter_deep_sleep()
+        else:
+            countdown_label.text = "NO SLEEP"
+            countdown_label.color = 0xFF0000
+    else:
+        if d0d2_combo_active:
+            # Combo released - switch back to main UI
+            display.root_group = splash
+        d0d2_combo_active = False
 
     # Clear tap tempo if no tap for 2 seconds
     if tap_times and (now - tap_times[-1] > 2.0):
@@ -373,24 +548,33 @@ while True:
         midi.send(NoteOn(note_on, 100))
 
     # --- Update Blink State ---
-    blink_interval = 0.25  # Consistent blink rate in edit mode
+    blink_interval = 0.5  # Consistent blink rate in edit mode
     if now - last_blink > blink_interval:
         blink_state = not blink_state
         last_blink = now
 
-    # --- Read Battery (every 1 second, or 2 seconds after stabilized) ---
-    # Use cell_percent directly from the MAX17048 - it handles all the complexity
-    # of LiPo discharge curves and charging via its ModelGauge algorithm
+    # --- Read Battery and USB status (every 1 second, or 2 seconds after stabilized) ---
     batt_interval = 1.0 if batt_reads < 2 else 2.0
     if now - last_batt_update > batt_interval:
-        usb_connected = supervisor.runtime.usb_connected
         if has_battery:
             try:
                 reading = battery.cell_percent
-                # Only count as valid if reading is reasonable (not 0 or garbage)
-                if 0 < reading <= 100:
+                charge_rate = battery.charge_rate
+
+                # Valid reading (allow >100% for fully charged batteries)
+                if 0 <= reading <= 120:
                     batt_pct = reading
                     batt_reads += 1
+
+                # Detect charging state transition (charge_rate goes from <=0 to >0)
+                is_charging = charge_rate > 0
+                if is_charging and not was_charging:
+                    # Just started charging - trigger white flash
+                    usb_reconnect_time = now
+                was_charging = is_charging
+
+                # Show + indicator only when actively charging
+                show_charging_indicator = is_charging
             except:
                 pass
         last_batt_update = now
@@ -409,14 +593,16 @@ while True:
             # Clamp percentage to 0-100 range for display
             pct = max(0, min(100, int(batt_pct)))
 
-            # Show percentage with + indicator when USB connected
-            if usb_connected:
+            # Show percentage with + indicator only when actively charging
+            if show_charging_indicator:
                 batt_label.text = f"{pct}%+"
             else:
                 batt_label.text = f"{pct}%"
 
-            # Color: green when good, grey when moderate, orange/red when low
-            if pct <= 5:
+            # Color logic - white flash for 2 seconds on USB reconnect
+            if usb_reconnect_time > 0 and (now - usb_reconnect_time < 2.0):
+                batt_label.color = 0xFFFFFF  # White flash
+            elif pct <= 5:
                 batt_label.color = 0xFF0000 if blink_state else 0x000000  # Blink red
             elif pct <= 10:
                 batt_label.color = 0xFF8800  # Orange
@@ -426,5 +612,14 @@ while True:
                 batt_label.color = 0x888888  # Grey
 
         last_display_update = now
+
+    # Display sleep after inactivity
+    if not display_dimmed and (now - last_activity_time > SLEEP_TIMEOUT):
+        display.brightness = DIM_BRIGHTNESS
+        display_dimmed = True
+
+    # Auto deep sleep after extended MIDI inactivity
+    if DEEP_SLEEP_AVAILABLE and (now - last_midi_activity > DEEP_SLEEP_TIMEOUT):
+        enter_deep_sleep()
 
     time.sleep(0.002)  # 2ms loop for tight MIDI timing
