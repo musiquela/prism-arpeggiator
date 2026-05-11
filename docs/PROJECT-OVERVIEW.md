@@ -135,14 +135,15 @@ In edit mode, the selected parameter blinks (500ms on/off).
 - **Percentage display** in top-right corner
 - **Stabilization:** Waits for 2 valid reads before showing (prevents garbage data)
 - **Sampling rate:** 1 second during stabilization, 2 seconds after
-- **Charging indicator:** `+` symbol appears when actively charging (charge_rate > 0)
-- **USB reconnect detection:** White flash for 2 seconds when USB connected
+- **USB power indicator:** `+` symbol appears when USB connected
+  - Detection via voltage edge detection (not `supervisor.runtime.usb_connected` which doesn't update on ESP32-S3)
+  - Voltage drop >0.03V between readings → USB disconnected → `+` disappears
+  - Voltage rise >0.03V between readings → USB reconnected → `+` reappears
 - **Color coding:**
   - **Red (blinking):** ≤5% - Critical low battery
   - **Orange:** 6-10% - Low battery
   - **Grey:** 11-50% - Normal
   - **Green:** >50% - Good charge
-  - **White (flash):** USB reconnected (2 second visual feedback)
 - **Range clamping:** Displays 0-100% even if chip reports >100% (fully charged batteries)
 
 ### Display Sleep Mode
@@ -163,6 +164,13 @@ In edit mode, the selected parameter blinks (500ms on/off).
 - **Power consumption:** ~18µA in deep sleep (vs ~70mA active)
 - **Graceful fallback:** If alarm module unavailable, device operates normally without deep sleep
 - **Button release detection:** Waits for all buttons to be released before entering deep sleep to prevent immediate wake
+- **Peripheral cleanup before sleep:**
+  - Display root_group released
+  - UART (MIDI) deinitialized
+  - I2C (battery monitor) deinitialized
+  - TFT_I2C_POWER disabled
+  - NEOPIXEL_POWER disabled
+  - Button pins deinitialized before PinAlarm creation
 
 **Sleep memory layout (6 bytes):**
 | Offset | Content | Valid Range |
@@ -404,7 +412,6 @@ Located in `code.py`, runs at ~500 Hz (2ms sleep).
 - Orange = 6-10%
 - Grey = 11-50%
 - Green = >50%
-- White (2s flash) = USB reconnected
 
 **Edit mode:** Selected parameter blinks (500ms on/off)
 

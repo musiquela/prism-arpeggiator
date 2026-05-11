@@ -231,9 +231,8 @@ PARAM_COLORS = {
 # Battery state
 batt_pct = 0
 batt_reads = 0  # Count successful reads before showing
-was_charging = False  # Track previous charging state
-usb_reconnect_time = 0  # For 2-second white flash on reconnect
-show_charging_indicator = False  # Show + only when actively charging
+last_voltage = 0.0  # Track voltage for USB edge detection
+usb_connected = True  # Assume USB on boot, detect transitions via voltage
 
 # Display sleep state
 last_activity_time = time.monotonic()  # Initialize to boot time
@@ -403,10 +402,24 @@ def enter_deep_sleep():
         time.sleep(0.01)
     time.sleep(0.1)  # Extra debounce delay
 
+    # Release display to free memory and stop rendering
+    display.root_group = None
+
+    # Deinit UART (MIDI) to release TX/RX pins
+    uart.deinit()
+
+    # Deinit I2C (battery monitor) to release I2C bus
+    if has_battery:
+        i2c.deinit()
+
     # Disable TFT power for minimal power consumption
     # On ESP32-S3 Reverse TFT Feather, this drops from ~70mA to ~18µA
     tft_power = digitalio.DigitalInOut(board.TFT_I2C_POWER)
     tft_power.switch_to_output(value=False)
+
+    # Disable NeoPixel power
+    neopixel_power = digitalio.DigitalInOut(board.NEOPIXEL_POWER)
+    neopixel_power.switch_to_output(value=False)
 
     # Release button pins before creating PinAlarms
     btn_d0.deinit()
@@ -553,28 +566,29 @@ while True:
         blink_state = not blink_state
         last_blink = now
 
-    # --- Read Battery and USB status (every 1 second, or 2 seconds after stabilized) ---
+    # --- Read Battery (every 1 second, or 2 seconds after stabilized) ---
     batt_interval = 1.0 if batt_reads < 2 else 2.0
     if now - last_batt_update > batt_interval:
         if has_battery:
             try:
                 reading = battery.cell_percent
-                charge_rate = battery.charge_rate
+                voltage = battery.cell_voltage
 
                 # Valid reading (allow >100% for fully charged batteries)
                 if 0 <= reading <= 120:
                     batt_pct = reading
                     batt_reads += 1
 
-                # Detect charging state transition (charge_rate goes from <=0 to >0)
-                is_charging = charge_rate > 0
-                if is_charging and not was_charging:
-                    # Just started charging - trigger white flash
-                    usb_reconnect_time = now
-                was_charging = is_charging
-
-                # Show + indicator only when actively charging
-                show_charging_indicator = is_charging
+                # Detect USB connect/disconnect via voltage edge detection
+                # Voltage drops ~0.04V when USB disconnected (battery takes load)
+                # Voltage rises ~0.04V when USB reconnected (charger provides power)
+                if last_voltage > 0:
+                    voltage_delta = voltage - last_voltage
+                    if voltage_delta < -0.03:  # Voltage dropped - USB disconnected
+                        usb_connected = False
+                    elif voltage_delta > 0.03:  # Voltage rose - USB reconnected
+                        usb_connected = True
+                last_voltage = voltage
             except:
                 pass
         last_batt_update = now
@@ -593,16 +607,14 @@ while True:
             # Clamp percentage to 0-100 range for display
             pct = max(0, min(100, int(batt_pct)))
 
-            # Show percentage with + indicator only when actively charging
-            if show_charging_indicator:
+            # Show percentage with + indicator when USB connected
+            if usb_connected:
                 batt_label.text = f"{pct}%+"
             else:
                 batt_label.text = f"{pct}%"
 
-            # Color logic - white flash for 2 seconds on USB reconnect
-            if usb_reconnect_time > 0 and (now - usb_reconnect_time < 2.0):
-                batt_label.color = 0xFFFFFF  # White flash
-            elif pct <= 5:
+            # Color logic based on battery level
+            if pct <= 5:
                 batt_label.color = 0xFF0000 if blink_state else 0x000000  # Blink red
             elif pct <= 10:
                 batt_label.color = 0xFF8800  # Orange
