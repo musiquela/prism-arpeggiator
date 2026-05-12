@@ -41,15 +41,18 @@ The device is fully battery-powered and features a comprehensive UI controlled b
 |-----|----------|
 | TX | MIDI OUT (to synth MIDI IN) |
 | RX | MIDI IN (from synth MIDI OUT) |
-| D0 | Button: Param decrease (edit) / Wake display |
-| D1 | Button: Tap tempo / Edit mode / Param select |
-| D2 | Button: Param increase (edit) / Wake display |
+| D0 | Button (left): Param decrease (edit) / Wake display |
+| D1 | Button (center): Tap tempo / Edit mode / Param select |
+| D2 | Button (right): Param increase (edit) / Wake display |
 | I2C (default) | MAX17048 battery monitor |
+
+*Note: Button positions (left/center/right) are relative to the 180° rotated display orientation.*
 
 ### Display Specifications
 - **Resolution:** 240x135 pixels
 - **Colors:** 16-bit color (65,536 colors)
 - **Layout:** Portrait orientation
+- **Rotation:** 180° (MIDI jacks face correct direction for rack mounting)
 - **Font:** terminalio.FONT (built-in monospace)
 - **Scale:** 2x for all text (readable from distance)
 

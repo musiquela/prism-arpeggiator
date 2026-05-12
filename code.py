@@ -3,10 +3,10 @@
 MIDI Arpeggiator - Phase 3: Full Features
 ESP32-S3 Reverse TFT Feather + MIDI FeatherWing
 
-Controls:
-- D0: Decrease selected param (edit mode only) / wake display
-- D1: Tap tempo (normal) / long press enter/exit edit mode / short press cycle param (edit mode)
-- D2: Increase selected param (edit mode only) / wake display
+Controls (with display rotated 180° for MIDI jack orientation):
+- D0 (left): Decrease selected param (edit mode only) / wake display
+- D1 (center): Tap tempo (normal) / long press enter/exit edit mode / short press cycle param (edit mode)
+- D2 (right): Increase selected param (edit mode only) / wake display
 - D0+D2 (hold 2s): Enter deep sleep mode (preserves settings)
 - Auto-sleep: After 15 min of no MIDI/button activity
 - Any button: Wake from deep sleep
@@ -55,6 +55,7 @@ from scales import SCALE_NAMES
 
 # --- Display Setup ---
 display = board.DISPLAY
+display.rotation = 180  # Rotate 180 degrees for MIDI jack orientation
 
 # Set initial brightness for manual control
 display.brightness = 1.0
@@ -160,7 +161,6 @@ scale_label = label.Label(terminalio.FONT, text="OFF", color=0xFF88FF, scale=2)
 scale_label.x = 55
 scale_label.y = 110
 splash.append(scale_label)
-
 
 # --- MIDI Setup ---
 uart = busio.UART(board.TX, board.RX, baudrate=31250, timeout=0.001)
@@ -548,12 +548,13 @@ while True:
     # --- D0 and D2 behavior (edit mode only) ---
     if edit_mode and not wake_press:
         # D0/D2 adjust the selected parameter's value
+        # After 180° rotation: D0 is on left (decrease), D2 is on right (increase)
         if d0 and (now - last_btn_time["d0"] > 0.15):
-            adjust_param(-1)
+            adjust_param(-1)  # D0 decreases (left button after flip)
             last_btn_time["d0"] = now
 
         if d2 and (now - last_btn_time["d2"] > 0.15):
-            adjust_param(1)
+            adjust_param(1)   # D2 increases (right button after flip)
             last_btn_time["d2"] = now
     # Normal mode: D0/D2 do nothing (only wake from sleep, handled above)
 
