@@ -167,9 +167,12 @@ uart = busio.UART(board.TX, board.RX, baudrate=31250, timeout=0.001)
 midi = adafruit_midi.MIDI(midi_in=uart, midi_out=uart, in_channel=None, out_channel=0)
 
 # --- Battery Monitor ---
-# The MAX17048 uses Maxim's ModelGauge algorithm which tracks battery state over time.
-# Simply read cell_percent directly - do NOT use quick_start on boot or custom voltage
-# calculations, as these interfere with the algorithm's learned model.
+# The adafruit_max1704x library constructor calls reset(), which erases the MAX17048's
+# ModelGauge learned model. After reset, the chip falls back to raw voltage-based
+# estimation which is inaccurate under load. We compensate by:
+# 1. Waiting for system stabilization after boot (see Battery Stabilization section)
+# 2. Calling quick_start to trigger SOC recalibration from stable voltage
+# 3. Using voltage-based sanity checks during the first 4 reads
 try:
     import adafruit_max1704x
     i2c = board.I2C()
@@ -262,6 +265,28 @@ countdown_splash.append(countdown_label)
 
 # MIDI activity tracking for auto-sleep
 last_midi_activity = time.monotonic()
+
+
+def voltage_to_percent_estimate(voltage):
+    """Approximate percentage from voltage (fallback when ModelGauge unstable).
+
+    Used during stabilization to reject wildly wrong readings from the
+    MAX17048 after its ModelGauge model is reset by the library constructor.
+    """
+    if voltage >= 4.15:
+        return 100
+    elif voltage >= 4.0:
+        return 85
+    elif voltage >= 3.85:
+        return 65
+    elif voltage >= 3.75:
+        return 45
+    elif voltage >= 3.65:
+        return 25
+    elif voltage >= 3.5:
+        return 10
+    else:
+        return 5
 
 
 # --- Helper Functions ---
@@ -397,7 +422,6 @@ def enter_deep_sleep():
     show_sleep_message()
 
     # Wait for all buttons to be released before sleeping
-    # Otherwise the PinAlarm triggers immediately on the still-pressed button
     while (not btn_d0.value) or btn_d1.value or btn_d2.value:
         time.sleep(0.01)
     time.sleep(0.1)  # Extra debounce delay
@@ -413,7 +437,6 @@ def enter_deep_sleep():
         i2c.deinit()
 
     # Disable TFT power for minimal power consumption
-    # On ESP32-S3 Reverse TFT Feather, this drops from ~70mA to ~18µA
     tft_power = digitalio.DigitalInOut(board.TFT_I2C_POWER)
     tft_power.switch_to_output(value=False)
 
@@ -427,19 +450,28 @@ def enter_deep_sleep():
     btn_d2.deinit()
 
     # Configure wake alarms for all three buttons
-    # pull=True enables internal pull resistor opposite to value (prevents false triggers)
-    # D0: wake when LOW, pull=True enables pull-UP
-    # D1/D2: wake when HIGH, pull=True enables pull-DOWN
     pin_alarm_d0 = PinAlarm(pin=board.D0, value=False, pull=True)
     pin_alarm_d1 = PinAlarm(pin=board.D1, value=True, pull=True)
     pin_alarm_d2 = PinAlarm(pin=board.D2, value=True, pull=True)
 
-    # Enter deep sleep - this NEVER returns, device will restart
+    # Enter deep sleep - device will restart on wake
     alarm.exit_and_deep_sleep_until_alarms(pin_alarm_d0, pin_alarm_d1, pin_alarm_d2)
 
 # Restore state if waking from deep sleep
 if waking_from_sleep and DEEP_SLEEP_AVAILABLE:
     restore_state_from_sleep_memory()
+
+# --- Battery Stabilization ---
+# The MAX17048 library constructor calls reset(), erasing the ModelGauge learned model.
+# We must wait for the system to stabilize (display drawn, MCU settled), then trigger
+# quick_start to recalibrate SOC from the current stable voltage.
+if has_battery:
+    time.sleep(2.0)  # Wait for voltage to settle under stable load
+    try:
+        battery.quick_start = True  # Trigger SOC recalibration
+        time.sleep(0.5)  # Wait for algorithm to update
+    except:
+        pass
 
 
 # --- Main Loop ---
@@ -567,17 +599,27 @@ while True:
         last_blink = now
 
     # --- Read Battery (every 1 second, or 2 seconds after stabilized) ---
-    batt_interval = 1.0 if batt_reads < 2 else 2.0
+    # Wait for 4 reads to allow ModelGauge algorithm to settle after quick_start
+    batt_interval = 1.0 if batt_reads < 4 else 2.0
     if now - last_batt_update > batt_interval:
         if has_battery:
             try:
                 reading = battery.cell_percent
                 voltage = battery.cell_voltage
 
-                # Valid reading (allow >100% for fully charged batteries)
-                if 0 <= reading <= 120:
-                    batt_pct = reading
-                    batt_reads += 1
+                # During stabilization (first 4 reads), use voltage estimate to reject
+                # wildly inaccurate readings from the ModelGauge before it settles
+                if batt_reads < 4:
+                    voltage_estimate = voltage_to_percent_estimate(voltage)
+                    # Reject if reading differs from voltage estimate by >25%
+                    # (indicates ModelGauge hasn't stabilized yet)
+                    if abs(reading - voltage_estimate) <= 25 and 0 <= reading <= 120:
+                        batt_pct = reading
+                        batt_reads += 1
+                else:
+                    # After stabilization, trust the ModelGauge
+                    if 0 <= reading <= 120:
+                        batt_pct = reading
 
                 # Detect USB connect/disconnect via voltage edge detection
                 # Voltage drops ~0.04V when USB disconnected (battery takes load)
@@ -597,8 +639,8 @@ while True:
     if now - last_display_update > 0.1:
         update_param_display(blink_state)
 
-        # Update battery display - wait for 2 valid reads to stabilize
-        if has_battery and batt_reads >= 2:
+        # Update battery display - wait for 4 valid reads to stabilize after quick_start
+        if has_battery and batt_reads >= 4:
             # Add label to display on first valid reading
             if not batt_label_shown:
                 splash.append(batt_label)
