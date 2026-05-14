@@ -210,7 +210,25 @@ Add your own rules as your project develops patterns. See existing examples in `
 
 ---
 
-## 7. QUICK REFERENCE
+## 7. RELEASE PROTOCOL
+
+At key milestones, follow this sequence:
+
+### Steps
+1. **Commit** — Stage and commit all changes with descriptive message
+2. **Push** — Push to origin/main
+3. **Version bump** — Update `VERSION` file (e.g., 1.1.0 → 1.2.0)
+4. **Tag** — Create annotated tag: `git tag -a vX.X.X -m "Release notes..."`
+5. **Push tag** — `git push origin vX.X.X`
+6. **Build firmware** — Run `./scripts/build-firmware.sh`
+7. **Share** — Send `dist/prism-firmware-vX.X.X.zip` to users
+
+### User Install Instructions
+Users extract ZIP, delete everything on CIRCUITPY, copy contents. Device auto-restarts.
+
+---
+
+## 8. QUICK REFERENCE
 
 - **Claude deploys, user never does.** Copy to `/Volumes/CIRCUITPY/` and monitor console output. User does not deploy or relay debug info.
 - **Search before building:** `grep -rl "term" docs/learnings/`
@@ -220,7 +238,7 @@ Add your own rules as your project develops patterns. See existing examples in `
 
 ---
 
-## 8. AGENTS
+## 9. AGENTS
 
 Specialized agents live in `.claude/agents/`. Each has constrained tools and a defined role.
 
