@@ -212,6 +212,7 @@ Add your own rules as your project develops patterns. See existing examples in `
 
 ## 7. QUICK REFERENCE
 
+- **Claude deploys, user never does.** Copy to `/Volumes/CIRCUITPY/` and monitor console output. User does not deploy or relay debug info.
 - **Search before building:** `grep -rl "term" docs/learnings/`
 - **Prefer new commits over amend** — safer history
 - **Never force push main**

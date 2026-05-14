@@ -38,6 +38,10 @@ from adafruit_display_shapes.rect import Rect
 import adafruit_midi
 from adafruit_midi.note_on import NoteOn
 from adafruit_midi.note_off import NoteOff
+from adafruit_midi.control_change import ControlChange
+from adafruit_midi.program_change import ProgramChange
+from adafruit_midi.pitch_bend import PitchBend
+from adafruit_midi.channel_pressure import ChannelPressure
 
 # Deep sleep support - graceful fallback if unavailable
 try:
@@ -488,6 +492,9 @@ while True:
         elif isinstance(msg, NoteOff) or (isinstance(msg, NoteOn) and msg.velocity == 0):
             note_buffer.note_off(msg.note)
             arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
+        # Pass through control messages (PC, CC, pitch bend, aftertouch)
+        elif isinstance(msg, (ProgramChange, ControlChange, PitchBend, ChannelPressure)):
+            midi.send(msg)
 
     # --- Read Buttons ---
     d0 = not btn_d0.value

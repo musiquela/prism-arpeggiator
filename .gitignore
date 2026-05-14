@@ -21,3 +21,6 @@ __pycache__/
 
 # Work tracking
 .work/
+
+# Build output
+dist/

@@ -13,12 +13,13 @@ class Arpeggiator:
     PATTERNS = ["up", "down", "updown", "downup", "random", "order"]
 
     # Note divisions (relative to quarter note)
+    # Use exact fractions for triplets to prevent cumulative drift
     DIVISIONS = {
         "1/4": 1.0,
         "1/8": 0.5,
-        "1/8T": 0.333,
+        "1/8T": 1.0 / 3.0,   # Exact third
         "1/16": 0.25,
-        "1/16T": 0.167,
+        "1/16T": 1.0 / 6.0,  # Exact sixth
     }
 
     def __init__(self):
@@ -76,6 +77,9 @@ class Arpeggiator:
             self._sequence = []
             return
 
+        old_len = len(self._sequence)
+        old_first = self._sequence[0] if self._sequence else None
+
         # Apply scale quantization first
         quantized = []
         for note in notes:
@@ -116,9 +120,16 @@ class Arpeggiator:
                 for octave in range(self.octaves):
                     self._sequence.append(note + (octave * 12))
 
-        # Reset index if sequence changed
+        # Handle index when sequence changes
         if self._seq_index >= len(self._sequence):
             self._seq_index = 0
+        # Prevent double-play of first note when chord is being built:
+        # If sequence grew, index is at 0, and first note is same, advance to skip replay
+        elif (len(self._sequence) > old_len and
+              self._seq_index == 0 and
+              old_first is not None and
+              self._sequence[0] == old_first):
+            self._seq_index = 1 if len(self._sequence) > 1 else 0
 
     def tick_interval(self):
         """Calculate time between notes in seconds."""
@@ -166,7 +177,15 @@ class Arpeggiator:
             note_on = next_note
             self._current_note = next_note
             self._note_on_time = now
-            self._last_tick = now
+
+            # Absolute timing: advance by exactly one interval
+            # This prevents cumulative drift from loop latency
+            self._last_tick += interval
+
+            # Catch-up: if we've fallen too far behind (>2 intervals),
+            # reset to now to prevent burst of notes after pause/tempo change
+            if now - self._last_tick > interval * 2:
+                self._last_tick = now
 
             # Advance sequence index
             self._seq_index = (self._seq_index + 1) % len(self._sequence)
