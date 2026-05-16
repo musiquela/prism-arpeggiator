@@ -26,7 +26,6 @@ cp "$PROJECT_ROOT/code.py" "$BUILD_DIR/$PACKAGE_NAME/"
 cp "$PROJECT_ROOT/boot.py" "$BUILD_DIR/$PACKAGE_NAME/"
 cp "$PROJECT_ROOT/arpeggiator.py" "$BUILD_DIR/$PACKAGE_NAME/"
 cp "$PROJECT_ROOT/note_buffer.py" "$BUILD_DIR/$PACKAGE_NAME/"
-cp "$PROJECT_ROOT/scales.py" "$BUILD_DIR/$PACKAGE_NAME/"
 
 # Download and extract libraries
 echo "Downloading CircuitPython library bundle..."
