@@ -55,7 +55,6 @@ except ImportError:
 # Import our modules
 from note_buffer import NoteBuffer
 from arpeggiator import Arpeggiator
-from scales import SCALE_NAMES
 
 # --- Display Setup ---
 display = board.DISPLAY
@@ -82,15 +81,10 @@ if waking_from_sleep:
     time.sleep(0.3)
 else:
     # Full boot splash
-    title_label = label.Label(terminalio.FONT, text="David Wingo's", color=0x888888, scale=2)
+    title_label = label.Label(terminalio.FONT, text="WELCOME TO PRISME", color=0xFFFFFF, scale=2)
     title_label.anchor_point = (0.5, 0.5)
-    title_label.anchored_position = (120, 55)
+    title_label.anchored_position = (120, 67)
     boot_splash.append(title_label)
-
-    subtitle_label = label.Label(terminalio.FONT, text="Arpeggiator", color=0xFFFFFF, scale=3)
-    subtitle_label.anchor_point = (0.5, 0.5)
-    subtitle_label.anchored_position = (120, 85)
-    boot_splash.append(subtitle_label)
 
     time.sleep(1.5)
 
@@ -155,16 +149,16 @@ oct_label.x = 55
 oct_label.y = 88
 splash.append(oct_label)
 
-# Scale - line 5
-scl_lbl = label.Label(terminalio.FONT, text="SCL", color=0x666666, scale=2)
-scl_lbl.x = 5
-scl_lbl.y = 110
-splash.append(scl_lbl)
+# Swing - line 5
+swg_lbl = label.Label(terminalio.FONT, text="SWG", color=0x666666, scale=2)
+swg_lbl.x = 5
+swg_lbl.y = 110
+splash.append(swg_lbl)
 
-scale_label = label.Label(terminalio.FONT, text="OFF", color=0xFF88FF, scale=2)
-scale_label.x = 55
-scale_label.y = 110
-splash.append(scale_label)
+swing_label = label.Label(terminalio.FONT, text="0%", color=0xFF88FF, scale=2)
+swing_label.x = 55
+swing_label.y = 110
+splash.append(swing_label)
 
 # --- MIDI Setup ---
 uart = busio.UART(board.TX, board.RX, baudrate=31250, timeout=0.001)
@@ -209,7 +203,7 @@ last_btn_time = {"d0": 0, "d1": 0, "d2": 0}
 tap_times = []  # For tap tempo
 pattern_index = 0
 division_index = 1  # Start at 1/8
-scale_index = 0
+swing_value = 0  # 0-50 in steps of 5
 last_display_update = 0
 last_batt_update = -2.0  # Trigger first battery read immediately
 
@@ -232,7 +226,7 @@ PARAM_COLORS = {
     "PAT": 0x00FF88,
     "DIV": 0x00FFFF,
     "OCT": 0xFFFF00,
-    "SCL": 0xFF88FF,
+    "SWG": 0xFF88FF,
 }
 
 # Battery state
@@ -255,6 +249,15 @@ DEEP_SLEEP_HOLD_TIME = 2.0  # Seconds to hold D0+D2 for manual sleep
 # Deep sleep combo detection (D0 + D2 simultaneous long-press)
 d0d2_combo_start = 0
 d0d2_combo_active = False
+
+# D0/D2 press tracking for tap vs hold-to-repeat
+d0_press_start = 0
+d2_press_start = 0
+
+# Easter egg: D2 long-press randomization
+d2_easter_start = 0
+d2_easter_active = False
+EASTER_EGG_HOLD_TIME = 5.0  # Seconds
 
 # Countdown display (full-screen centered) for sleep combo
 countdown_splash = displayio.Group()
@@ -324,16 +327,44 @@ def update_param_display(blink):
     else:
         oct_label.color = PARAM_COLORS["OCT"]
 
-    # Scale
-    scale_label.text = arp.scale
+    # Swing
+    swing_label.text = f"{arp.swing}%"
     if edit_mode and edit_param == 4:
-        scale_label.color = PARAM_COLORS["SCL"] if blink else 0x000000
+        swing_label.color = PARAM_COLORS["SWG"] if blink else 0x000000
     else:
-        scale_label.color = PARAM_COLORS["SCL"]
+        swing_label.color = PARAM_COLORS["SWG"]
+
+
+def randomize_params():
+    """Easter egg: Randomize all params to inspiring values."""
+    global pattern_index, division_index, swing_value
+    import random
+
+    # BPM: 80-160
+    arp.set_bpm(random.randint(80, 160))
+
+    # Pattern: any of 6
+    pattern_index = random.randint(0, len(Arpeggiator.PATTERNS) - 1)
+    arp.set_pattern(Arpeggiator.PATTERNS[pattern_index])
+
+    # Division: 1/8, 1/8T, or 1/16 (indices 1, 2, 3)
+    division_index = random.choice([1, 2, 3])
+    arp.set_division(DIVISIONS[division_index])
+
+    # Octave: 1-3
+    arp.set_octaves(random.randint(1, 3))
+
+    # Swing: 0-30% in steps of 5
+    swing_value = random.choice([0, 5, 10, 15, 20, 25, 30])
+    arp.set_swing(swing_value)
+
+    # Rebuild sequence with new octave setting
+    arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
+
 
 def adjust_param(direction):
     """Adjust the currently selected parameter."""
-    global pattern_index, division_index, scale_index
+    global pattern_index, division_index, swing_value
 
     if edit_param == 0:  # BPM
         new_bpm = arp.bpm + direction
@@ -353,27 +384,31 @@ def adjust_param(direction):
             new_oct = 1
         arp.set_octaves(new_oct)
         arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
-    elif edit_param == 4:  # Scale
-        scale_index = (scale_index + direction) % len(SCALE_NAMES)
-        arp.set_scale(SCALE_NAMES[scale_index])
-        arp.build_sequence(note_buffer.notes_in_order if arp.pattern == "order" else note_buffer.notes)
+    elif edit_param == 4:  # Swing
+        swing_value = swing_value + (direction * 5)
+        if swing_value < 0:
+            swing_value = 50  # Wrap
+        elif swing_value > 50:
+            swing_value = 0
+        arp.set_swing(swing_value)
+        # No rebuild needed - swing is timing only
 
 # --- Deep Sleep Functions ---
 def save_state_to_sleep_memory():
     """Save arpeggiator state to sleep memory for restoration on wake."""
     if not DEEP_SLEEP_AVAILABLE:
         return
-    # Layout: [magic, bpm, pattern_index, division_index, octaves, scale_index]
+    # Layout: [magic, bpm, pattern_index, division_index, octaves, swing_value]
     alarm.sleep_memory[0] = 0xAB  # Magic byte to validate data
     alarm.sleep_memory[1] = arp.bpm
     alarm.sleep_memory[2] = pattern_index
     alarm.sleep_memory[3] = division_index
     alarm.sleep_memory[4] = arp.octaves
-    alarm.sleep_memory[5] = scale_index
+    alarm.sleep_memory[5] = swing_value
 
 def restore_state_from_sleep_memory():
     """Restore arpeggiator state from sleep memory after wake."""
-    global pattern_index, division_index, scale_index
+    global pattern_index, division_index, swing_value
     if not DEEP_SLEEP_AVAILABLE:
         return
     # Check magic byte
@@ -388,9 +423,9 @@ def restore_state_from_sleep_memory():
     if division_index < len(DIVISIONS):
         arp.set_division(DIVISIONS[division_index])
     arp.set_octaves(alarm.sleep_memory[4])
-    scale_index = alarm.sleep_memory[5]
-    if scale_index < len(SCALE_NAMES):
-        arp.set_scale(SCALE_NAMES[scale_index])
+    swing_value = alarm.sleep_memory[5]
+    if swing_value <= 50:
+        arp.set_swing(swing_value)
 
 def show_sleep_message():
     """Display sleep message briefly, then blank screen before deep sleep."""
@@ -553,17 +588,50 @@ while True:
         d1_was_pressed = False
 
     # --- D0 and D2 behavior (edit mode only) ---
-    if edit_mode and not wake_press:
-        # D0/D2 adjust the selected parameter's value
-        # After 180° rotation: D0 is on left (decrease), D2 is on right (increase)
-        if d0 and (now - last_btn_time["d0"] > 0.15):
-            adjust_param(-1)  # D0 decreases (left button after flip)
-            last_btn_time["d0"] = now
+    # Tap = single increment, Hold 1.5s = start repeating
+    # Guard: skip if both pressed (D0+D2 combo for deep sleep)
+    if edit_mode and not wake_press and not (d0 and d2):
+        # D0 - decrease (left button after 180° flip)
+        if d0:
+            if d0_press_start == 0 and now - last_btn_time["d0"] > 0.15:
+                # Button just pressed (with 150ms debounce)
+                d0_press_start = now
+                adjust_param(-1)
+                last_btn_time["d0"] = now
+            elif d0_press_start > 0 and now - d0_press_start > 1.5 and now - last_btn_time["d0"] > 0.1:
+                # Held for 1.5s, repeat every 0.1s
+                adjust_param(-1)
+                last_btn_time["d0"] = now
 
-        if d2 and (now - last_btn_time["d2"] > 0.15):
-            adjust_param(1)   # D2 increases (right button after flip)
-            last_btn_time["d2"] = now
-    # Normal mode: D0/D2 do nothing (only wake from sleep, handled above)
+        # D2 - increase (right button after 180° flip)
+        if d2:
+            if d2_press_start == 0 and now - last_btn_time["d2"] > 0.15:
+                # Button just pressed (with 150ms debounce)
+                d2_press_start = now
+                adjust_param(1)
+                last_btn_time["d2"] = now
+            elif d2_press_start > 0 and now - d2_press_start > 1.5 and now - last_btn_time["d2"] > 0.1:
+                # Held for 1.5s, repeat every 0.1s
+                adjust_param(1)
+                last_btn_time["d2"] = now
+
+    # Reset press tracking when buttons released (always, not just in edit mode)
+    if not d0:
+        d0_press_start = 0
+    if not d2:
+        d2_press_start = 0
+
+    # --- Easter Egg: D2 5-second hold in normal mode ---
+    if not edit_mode and d2 and not d0:  # D2 only, not in edit mode, not combo
+        if d2_easter_start == 0:
+            d2_easter_start = now
+        elif not d2_easter_active and now - d2_easter_start >= EASTER_EGG_HOLD_TIME:
+            # Trigger easter egg
+            d2_easter_active = True
+            randomize_params()
+    else:
+        d2_easter_start = 0
+        d2_easter_active = False
 
     # --- D0+D2 Combo: Deep Sleep Trigger ---
     if d0 and d2:

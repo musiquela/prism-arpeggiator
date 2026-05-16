@@ -3,7 +3,6 @@
 
 import random
 import time
-from scales import quantize_to_scale, SCALE_NAMES
 
 
 class Arpeggiator:
@@ -28,12 +27,12 @@ class Arpeggiator:
         self.division = "1/8"
         self.octaves = 1  # 1-4
         self.gate = 0.5  # 0.25, 0.5, 0.75, 1.0
-        self.scale = "OFF"  # Scale quantization
-        self.root = 0  # Root note (0=C, 1=C#, etc.)
+        self.swing = 0  # Swing percentage (0-50, increments of 5)
 
         self._sequence = []
         self._seq_index = 0
         self._direction = 1  # 1=up, -1=down (for updown/downup)
+        self._swing_phase = 0  # 0 or 1, toggles each tick
         self._last_tick = 0
         self._current_note = None
         self._note_on_time = 0
@@ -62,14 +61,9 @@ class Arpeggiator:
         """Set gate length (0.25-1.0)."""
         self.gate = max(0.25, min(1.0, gate))
 
-    def set_scale(self, scale):
-        """Set scale quantization."""
-        if scale in SCALE_NAMES:
-            self.scale = scale
-
-    def set_root(self, root):
-        """Set root note (0-11)."""
-        self.root = root % 12
+    def set_swing(self, swing):
+        """Set swing percentage (0-50, increments of 5)."""
+        self.swing = max(0, min(50, swing))
 
     def build_sequence(self, notes):
         """Build arpeggiated sequence from held notes."""
@@ -80,12 +74,8 @@ class Arpeggiator:
         old_len = len(self._sequence)
         old_first = self._sequence[0] if self._sequence else None
 
-        # Apply scale quantization first
-        quantized = []
-        for note in notes:
-            q_note = quantize_to_scale(note, self.scale, self.root)
-            if q_note not in quantized:
-                quantized.append(q_note)
+        # Use notes directly (no scale quantization)
+        quantized = list(notes)
 
         # Expand octaves
         expanded = []
@@ -155,8 +145,20 @@ class Arpeggiator:
                 self._current_note = None
             return note_on, note_off
 
-        interval = self.tick_interval()
-        gate_duration = self.gate_time()
+        base_interval = self.tick_interval()
+
+        # Apply swing timing
+        if self.swing > 0:
+            swing_factor = self.swing / 100.0
+            if self._swing_phase == 0:
+                interval = base_interval * (1 + swing_factor)
+            else:
+                interval = base_interval * (1 - swing_factor)
+        else:
+            interval = base_interval
+
+        # Gate based on base interval (consistent note lengths)
+        gate_duration = base_interval * self.gate
 
         # Check if current note should turn off
         if self._current_note is not None:
@@ -190,6 +192,9 @@ class Arpeggiator:
             # Advance sequence index
             self._seq_index = (self._seq_index + 1) % len(self._sequence)
 
+            # Toggle swing phase
+            self._swing_phase = 1 - self._swing_phase
+
             # For random pattern, reshuffle when we loop
             if self.pattern == "random" and self._seq_index == 0:
                 random.shuffle(self._sequence)
@@ -201,6 +206,7 @@ class Arpeggiator:
         self._sequence = []
         self._seq_index = 0
         self._direction = 1
+        self._swing_phase = 0
         self._last_tick = 0
         self._current_note = None
 
